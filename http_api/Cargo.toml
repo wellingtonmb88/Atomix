@@ -1,0 +1,20 @@
+[package]
+name = "http_api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum.workspace = true
+base64 = "0.22"
+bs58 = "0.5"
+greedy-scheduler.workspace = true
+hex = "0.4"
+serde = { workspace = true, features = ["derive"] }
+solana-pubkey.workspace = true
+solana-sdk = "3.0.0"
+tokio = { workspace = true, features = ["macros", "rt"] }
+toolbox = { workspace = true, features = ["shutdown"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

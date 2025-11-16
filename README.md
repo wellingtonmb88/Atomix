@@ -879,21 +879,28 @@ solana airdrop 2
 
 ```
 ext-scheduler-bindings/
-├── core/                      # HTTP API server and scheduler wrapper
+├── core/                      # Main scheduler binary
 │   ├── src/
-│   │   ├── http_api.rs       # REST API endpoints
-│   │   ├── api.rs            # Scheduler API wrapper
+│   │   ├── api.rs            # Re-exports SchedulerApi from greedy-scheduler
 │   │   ├── control_thread.rs # Control thread management
 │   │   ├── scheduler_thread.rs # Scheduler thread
 │   │   ├── args.rs           # CLI arguments
 │   │   └── main.rs           # Entry point
 │   └── Cargo.toml
 │
+├── http_api/                  # HTTP REST API (library crate)
+│   ├── src/
+│   │   └── lib.rs            # REST API endpoints and router
+│   └── Cargo.toml
+│
 ├── greedy-scheduler/          # Core scheduler implementation
 │   ├── src/
 │   │   ├── lib.rs            # Main scheduler logic
+│   │   ├── api.rs            # SchedulerApi (MPSC channel wrapper)
 │   │   ├── priority_list.rs  # Priority management
-│   │   └── ...
+│   │   ├── performance_metrics.rs # Performance tracking
+│   │   ├── priority_id.rs    # Priority ID implementation
+│   │   └── transaction_map.rs # Transaction state management
 │   └── Cargo.toml
 │
 ├── greedy-scheduler-bench/    # Criterion benchmarks
@@ -907,6 +914,43 @@ ext-scheduler-bindings/
 │
 └── README.md                 # This file
 ```
+
+### Crate Dependencies
+
+```
+core (binary)
+├── http_api (library)
+│   └── greedy-scheduler (library)
+│       └── api module
+└── greedy-scheduler (library)
+    └── api module
+
+http_api (library)
+└── greedy-scheduler (library)
+    └── api module (SchedulerApi, QueryResponse, SchedulerCommand)
+
+greedy-scheduler (library)
+└── api module (public)
+    └── Exports: SchedulerApi, QueryResponse, SchedulerCommand
+```
+
+### Module Organization
+
+**core:** Binary application that starts the scheduler and HTTP server
+- Uses `http_api::start_server()` to start the HTTP API
+- Uses `greedy_scheduler::api::SchedulerApi` for scheduler communication
+- Manages scheduler thread and control flow
+
+**http_api:** Library crate with REST API implementation
+- Depends on `greedy_scheduler` for `SchedulerApi`
+- Exports `start_server()`, `create_router()` functions
+- All HTTP endpoints and request/response types
+- Can be reused in other projects
+
+**greedy-scheduler:** Core scheduler library
+- Contains `api` module with `SchedulerApi`
+- `SchedulerApi` uses MPSC channels for thread-safe communication
+- Exports priority management, bundle support, and metrics
 
 ---
 

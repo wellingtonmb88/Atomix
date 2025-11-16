@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "greedy-scheduler", "load-tester", "greedy-scheduler-bench"]
+members = ["core", "greedy-scheduler", "load-tester", "greedy-scheduler-bench", "http_api"]
 
 
 [workspace.package]

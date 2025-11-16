@@ -1126,18 +1126,13 @@ name = "core"
 version = "0.1.0"
 dependencies = [
  "agave-scheduling-utils",
- "axum",
- "base64 0.22.1",
- "bs58",
  "clap",
  "futures",
  "greedy-scheduler",
  "hashbrown 0.16.0",
- "hex",
+ "http_api",
  "serde",
  "serde_json",
- "solana-pubkey 3.0.0",
- "solana-sdk 3.0.0",
  "tokio",
  "toolbox",
  "tracing",
@@ -2302,6 +2297,23 @@ dependencies = [
  "http 1.3.1",
  "http-body",
  "pin-project-lite",
+]
+
+[[package]]
+name = "http_api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bs58",
+ "greedy-scheduler",
+ "hex",
+ "serde",
+ "solana-pubkey 3.0.0",
+ "solana-sdk 3.0.0",
+ "tokio",
+ "toolbox",
+ "tracing",
 ]
 
 [[package]]
