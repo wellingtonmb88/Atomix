@@ -20,6 +20,7 @@ use clap::Parser;
 use futures::stream::{self, StreamExt};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
+    blake3::Hash,
     commitment_config::CommitmentConfig,
     instruction::Instruction,
     message::Message,
@@ -192,6 +193,7 @@ struct SolanaLoadTester {
     config: Config,
     payer: Arc<Keypair>,
     tx_type: TransactionType,
+    http_client: reqwest::Client,
 }
 
 impl SolanaLoadTester {
@@ -210,8 +212,9 @@ impl SolanaLoadTester {
         };
 
         let tx_type = config.transaction_type.parse()?;
+        let http_client = reqwest::Client::new();
 
-        Ok(Self { client, config, payer, tx_type })
+        Ok(Self { client, config, payer, tx_type, http_client })
     }
 
     /// Request SOL airdrop
@@ -237,48 +240,88 @@ impl SolanaLoadTester {
     }
 
     /// Register bundle with HTTP API
-    fn register_bundle_with_api(&self, message_hashes: &[solana_sdk::hash::Hash]) {
+    async fn register_bundle_with_api(&self, sig_hashes: &[solana_sdk::hash::Hash]) {
         let mut hash_hexes = Vec::<String>::new();
-        for hash in message_hashes {
+        for hash in sig_hashes {
             hash_hexes.push(hash.to_string());
         }
         let payer_pubkey = self.payer.pubkey().to_string();
 
-        let payload = serde_json::json!({
-            "pubkey": payer_pubkey,
-            "tip": 1000000,
-            "tx_hashes": hash_hexes
-        });
+        let amount = 1_000_000; // 0.001 SOL
+        let recipient: Option<Pubkey> = match &self.config.payment_recipient {
+            Some(addr) => match addr.parse::<Pubkey>() {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    println!("Invalid payment recipient: {}", e);
+                    None
+                }
+            },
+            None => {
+                println!("Payment recipient required for x402_bundle");
+                None
+            }
+        };
 
-        let client = reqwest::blocking::Client::new();
-        match client
-            .post("http://localhost:8080/bundles/signer")
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-        {
-            Ok(response) => {
-                if response.status().is_success() {
-                    println!("✓ Bundle registered for hash: {:?}", hash_hexes);
-                } else {
-                    println!("✗ Failed to register bundle: {:?}", response.status());
+        let Some(recipient_pubkey) = recipient else {
+            return;
+        };
+
+        // Create and send payment transaction
+        let txs = match self.create_transfer_transaction(&recipient_pubkey, amount) {
+            Ok(txs) => txs,
+            Err(e) => {
+                println!("Invalid create_transfer_transaction: {}", e);
+                Vec::<Transaction>::new()
+            }
+        };
+
+        let mut transfer_result = Ok(());
+        for tx in txs {
+            match self.client.send_and_confirm_transaction(&tx) {
+                Ok(sig) => {
+                    // Call HTTP API to add bundle signer
+                    let api_client = reqwest::Client::new();
+                    let url = format!("{}/bundles/signer", self.config.api_url);
+
+                    let body = serde_json::json!({
+                        "pubkey": payer_pubkey,
+                        "tip": 50_000_000u64,
+                        "tx_hashes": hash_hexes,
+                        "payment_signature": sig.to_string()
+                    });
+                    println!("payment_signature: {}", sig.to_string());
+
+                    match api_client.post(&url).json(&body).send().await {
+                        Ok(response) => {
+                            if let Err(e) = response.error_for_status() {
+                                transfer_result = Err(Box::new(e) as Box<dyn std::error::Error>);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            transfer_result = Err(Box::new(e) as Box<dyn std::error::Error>);
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    transfer_result = Err(Box::new(e) as Box<dyn std::error::Error>);
+                    break;
                 }
             }
-            Err(e) => {
-                println!("✗ Error calling bundle API: {}", e);
-            }
         }
+        println!("transfer_result: {:?}", transfer_result);
     }
 
     /// Create a bundle with transfer transactions
-    fn create_bundle_transfer_transactions(
+    async fn create_bundle_transfer_transactions(
         &self,
         recipients: Vec<Pubkey>,
         amounts: Vec<u64>,
     ) -> Result<Vec<Transaction>, Box<dyn std::error::Error>> {
         let recent_blockhash = self.client.get_latest_blockhash()?;
 
-        let mut message_hashes = Vec::<solana_sdk::hash::Hash>::new();
+        let mut sig_hashes = Vec::<solana_sdk::hash::Hash>::new();
         let mut transactions = Vec::<Transaction>::new();
 
         for (i, recipient) in recipients.iter().enumerate() {
@@ -290,16 +333,22 @@ impl SolanaLoadTester {
             let mut transaction = Transaction::new_unsigned(message);
 
             transaction.sign(&[&*self.payer], recent_blockhash);
+            let tx_signature = transaction.signatures.first().unwrap();
 
-            let message_hash = transaction.message().hash();
-            println!("message_data_hash : {:?}", message_hash);
+            // Convert signature to [u8; 32] for compatibility (using first 32 bytes)
+            let mut sig_bytes = [0u8; 32];
+            sig_bytes.copy_from_slice(&tx_signature.as_array()[..32]);
 
-            message_hashes.push(message_hash);
+            // let message_hash = transaction.message().hash();
+            let sig_hash = solana_sdk::hash::Hash::new_from_array(sig_bytes);
+            println!("sig_hash : {:?}", sig_hash);
+
+            sig_hashes.push(sig_hash);
             transactions.push(transaction);
         }
 
         // Register bundle with API
-        self.register_bundle_with_api(&message_hashes);
+        self.register_bundle_with_api(&sig_hashes).await;
 
         Ok(transactions)
     }
@@ -312,7 +361,6 @@ impl SolanaLoadTester {
     ) -> Result<Vec<Transaction>, Box<dyn std::error::Error>> {
         let recent_blockhash = self.client.get_latest_blockhash()?;
 
-        let mut message_hashes = Vec::<solana_sdk::hash::Hash>::new();
         let mut transactions = Vec::<Transaction>::new();
 
         let instruction =
@@ -323,10 +371,6 @@ impl SolanaLoadTester {
 
         transaction.sign(&[&*self.payer], recent_blockhash);
 
-        let message_hash = transaction.message().hash();
-        println!("message_data_hash : {:?}", message_hash);
-
-        message_hashes.push(message_hash);
         transactions.push(transaction);
 
         Ok(transactions)
@@ -381,6 +425,7 @@ impl SolanaLoadTester {
                 let amounts = &[amount, amount + 300];
                 match self
                     .create_bundle_transfer_transactions(recipients.to_vec(), amounts.to_vec())
+                    .await
                 {
                     Ok(txs) => {
                         for tx in txs {
@@ -753,9 +798,9 @@ impl SolanaLoadTester {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = Config::parse();
-    // 2AS1StrCJM3NyhHNBqe645vjX7VTgjRazZd11LorvFpx
-    config.keypair = Some(String::from("./load-tester/keypair.json"));
+    let config = Config::parse();
+    // Removed hardcoded keypair path - use --keypair flag or generate new one
+    // config.keypair = Some(String::from("./load-tester/keypair.json"));
     let tester = SolanaLoadTester::new(config)?;
     tester.run().await?;
     Ok(())

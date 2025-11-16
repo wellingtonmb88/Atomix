@@ -2135,6 +2135,7 @@ dependencies = [
  "agave-transaction-view",
  "bincode",
  "blake3",
+ "bs58",
  "hashbrown 0.16.0",
  "hex",
  "min-max-heap",

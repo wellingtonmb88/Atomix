@@ -15,24 +15,35 @@ use std::str::FromStr;
 use greedy_scheduler::api::SchedulerApi;
 pub use payment::{PaymentVerifier, REQUIRED_PAYMENT_LAMPORTS};
 
-/// Helper function to decode tx hash from hex, base58, or base64
+/// Helper function to decode transaction signature from hex, base58, or base64
+/// Returns only the first 32 bytes of the signature for bundle matching
 fn decode_tx_hash(hash_str: &str) -> Result<Vec<u8>, String> {
-    // Try base58 decoding (Solana format for signatures/pubkeys)
-    if let Ok(bytes) = bs58::decode(hash_str).into_vec() {
-        return Ok(bytes);
-    }
+    let mut bytes = None;
 
-    // Try hex decoding first (most common for tx hashes)
-    if let Ok(bytes) = hex::decode(hash_str) {
-        return Ok(bytes);
+    // Try base58 decoding (Solana format for signatures - 64 bytes)
+    if let Ok(decoded) = bs58::decode(hash_str).into_vec() {
+        bytes = Some(decoded);
     }
-
+    // Try hex decoding
+    else if let Ok(decoded) = hex::decode(hash_str) {
+        bytes = Some(decoded);
+    }
     // Try base64 decoding
-    if let Ok(bytes) = general_purpose::STANDARD.decode(hash_str) {
-        return Ok(bytes);
+    else if let Ok(decoded) = general_purpose::STANDARD.decode(hash_str) {
+        bytes = Some(decoded);
     }
 
-    Err(format!("Failed to decode tx hash '{}'. Supported formats: hex, base58, base64", hash_str))
+    match bytes {
+        Some(b) => {
+            // Take only first 32 bytes (for 64-byte signatures)
+            let truncated = b.into_iter().take(32).collect();
+            Ok(truncated)
+        }
+        None => Err(format!(
+            "Failed to decode tx signature '{}'. Supported formats: hex, base58, base64",
+            hash_str
+        )),
+    }
 }
 
 /// Helper function to encode Vec<u8> to hex string
