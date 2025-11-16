@@ -26,7 +26,8 @@ The compiled binary will be at `../target/release/load-test`
 | `-r, --rpc-url <RPC_URL>` | RPC endpoint URL | `http://localhost:8899` |
 | `-n, --num-transactions <NUM>` | Total number of transactions | `100` |
 | `-c, --concurrency <NUM>` | Concurrent transactions | `10` |
-| `-t, --transaction-type <TYPE>` | Type: airdrop, transfer, memo, compute | `memo` |
+| `-t, --transaction-type <TYPE>` | Type: airdrop, transfer, bundle_transfer, memo, compute, x402_payment, x402_priority_signer, x402_bundle | `memo` |
+| `--payment-recipient <PUBKEY>` | Recipient for x402 payments | None |
 | `-a, --amount <AMOUNT>` | Amount in SOL | `0.001` |
 | `-k, --keypair <PATH>` | Path to keypair file | Generates new keypair |
 | `-d, --dry-run` | Test mode (doesn't send) | `false` |
@@ -96,6 +97,53 @@ The compiled binary will be at `../target/release/load-test`
   --concurrency 50 \
   --transaction-type memo \
   --no-confirm
+```
+
+### Bundle Transfer Test
+
+```bash
+./target/release/load-test \
+  --rpc-url http://localhost:8899 \
+  --num-transactions 10 \
+  --concurrency 1 \
+  --transaction-type bundle_transfer \
+  --amount 0.01
+```
+
+### X402 Payment Test
+
+```bash
+./target/release/load-test \
+  --rpc-url http://localhost:8899 \
+  --num-transactions 50 \
+  --concurrency 5 \
+  --transaction-type x402_payment \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --amount 0.001
+```
+
+### X402 Priority Signer Test
+
+```bash
+./target/release/load-test \
+  --rpc-url http://localhost:8899 \
+  --num-transactions 20 \
+  --concurrency 2 \
+  --transaction-type x402_priority_signer \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --amount 0.001
+```
+
+### X402 Bundle Test
+
+```bash
+./target/release/load-test \
+  --rpc-url http://localhost:8899 \
+  --num-transactions 10 \
+  --concurrency 1 \
+  --transaction-type x402_bundle \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --amount 0.001
 ```
 
 ## 📊 Sample Output
@@ -196,6 +244,12 @@ Errors:
 - Requires balance in payer account
 - Tests real transaction throughput
 
+### `bundle_transfer`
+- Creates a bundle of transfer transactions
+- Registers bundle with scheduler API (first 32 bytes of transaction signature)
+- Tests bundle scheduling and prioritization
+- Requires local scheduler running on port 8080
+
 ### `memo`
 - Transaction with memo program
 - Minimal overhead
@@ -205,6 +259,53 @@ Errors:
 - Transaction with compute budget
 - Minimal processing
 - Maximum performance for benchmarks
+
+### `x402_payment`
+- HTTP 402 payment protocol transactions
+- Sends payment to specified recipient
+- Tests x402 payment verification flow
+- Requires `--payment-recipient` flag
+
+### `x402_priority_signer`
+- X402 payment with priority signer registration
+- Registers payer as priority signer via HTTP API
+- Sends transfer transaction with x402 payment proof
+- Tests priority signer flow with payment verification
+- Requires `--payment-recipient` flag
+
+### `x402_bundle`
+- X402 payment with bundle registration
+- Creates bundle of transactions with x402 payment
+- Registers bundle via HTTP API using transaction signatures
+- Tests complete x402 bundle workflow
+- Requires `--payment-recipient` flag
+
+## 🔐 X402 Payment Protocol
+
+The load tester supports three x402 payment flows:
+
+### Payment Flow
+1. **x402_payment**: Simple payment to recipient
+   - Sends SOL transfer to payment recipient
+   - No scheduler interaction
+   - Tests basic payment verification
+
+### Priority Signer Flow
+1. **x402_priority_signer**: Payment + Priority Registration
+   - Sends payment to recipient
+   - Registers payer as priority signer via API
+   - Sends transfer transaction
+   - Tests priority signer scheduling
+
+### Bundle Flow
+1. **x402_bundle**: Payment + Bundle Registration
+   - Sends payment to recipient  
+   - Creates multiple transactions
+   - Registers bundle via API using **transaction signatures** (first 32 bytes)
+   - Submits all transactions
+   - Tests complete bundle workflow with payment verification
+
+**Important**: All x402 types use transaction signatures instead of message hashes for bundle identification.
 
 ## ⚙️ Performance
 
@@ -256,15 +357,15 @@ cargo build --release --bin load-test
 - Try reducing concurrency
 - Use local validator for testing
 
-## 📚 Additional Documentation
-
-- See `../LOAD_TEST_README.md` for complete documentation
-- See `../QUICK_START.md` for quick start guide
-- Alternative scripts in Bash, Python and TypeScript available
+### Bundle Registration Failed (422)
+- Ensure scheduler is running on `http://localhost:8080`
+- For x402 bundles, payment signature is required
+- Verify bundle API endpoint is accessible
+- Check that transaction signatures are being used (not message hashes)
 
 ## 🎨 Features
 
-- ✅ Multiple transaction types (airdrop, transfer, memo, compute)
+- ✅ Multiple transaction types (airdrop, transfer, bundle_transfer, memo, compute, x402_payment, x402_priority_signer, x402_bundle)
 - ✅ Configurable concurrency
 - ✅ Detailed latency statistics
 - ✅ Custom keypair support
@@ -272,7 +373,9 @@ cargo build --release --bin load-test
 - ✅ No-confirmation mode for maximum throughput
 - ✅ Real-time progress tracking
 - ✅ Error categorization and reporting
-- ✅ Bundle registration support (for scheduler testing)
+- ✅ Bundle registration with scheduler API using transaction signatures
+- ✅ X402 payment protocol support (payment, priority signer, bundle)
+- ✅ Fully async implementation (no blocking I/O)
 
 ## 🤝 Contributing
 

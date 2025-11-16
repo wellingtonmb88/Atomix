@@ -1,0 +1,20 @@
+{
+  "name": "e2e-tests",
+  "version": "1.0.0",
+  "description": "E2E tests for x402 bundle submission",
+  "type": "module",
+  "scripts": {
+    "test": "tsx test-x402-bundle.ts",
+    "test:watch": "tsx watch test-x402-bundle.ts"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.8",
+    "axios": "^1.7.9",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -219,12 +219,14 @@ cargo run -p load-tester -- \
   --num-transactions 10 \
   --api-url http://localhost:8080
 
-# Test bundle with payment
+# Test bundle with payment (uses transaction signatures for identification)
 cargo run -p load-tester -- \
   --transaction-type x402_bundle \
   --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
   --num-transactions 10
 ```
+
+**Note**: x402 bundle operations use **transaction signatures** (first 32 bytes) instead of message hashes for bundle identification. This ensures consistency as message hashes can change due to blockhash updates.
 
 **Disable Payment Verification:**
 ```bash
@@ -409,28 +411,41 @@ Group multiple transactions with tip-based prioritization and automatic batching
 - **Tip-Based Priority**: Higher tips = higher priority
 - **Multiple Hash Formats**: Supports hex, base58, and base64
 
-#### Transaction Hash Formats
+#### Transaction Signature Hash Formats
 
-**Input (POST requests) - Accepts:**
-1. **Hexadecimal** (64 characters):
+**Important**: Bundle transactions are identified using the **first 32 bytes of the transaction signature** (not the message hash). This ensures consistent identification as message hashes can change due to blockhash updates.
+
+**Client Responsibility**: The client is responsible for providing the transaction signature hash. Clients can send signatures in multiple formats, and the API will decode and process them accordingly.
+
+**Supported Input Formats (POST requests):**
+
+1. **Base58 Transaction Signature** (Solana native - recommended):
+   ```json
+   "tx_hashes": ["5VqZ8yfBKXp9kZ3nEq5fJ8YmGpZx9kYdH3fGq7Nx3kQ2aBcD7fHjK9mPqR8tS2uV3wX4yZ5aB6cC7dD8eE9fF1g"]
+   ```
+   When the client sends the full 64-byte signature, the API extracts the first 32 bytes for bundle matching.
+
+2. **Hexadecimal** (32 bytes - first half of signature):
    ```json
    "tx_hashes": ["a1b2c3d4e5f6789012345678901234567890123456789012345678901234"]
    ```
+   Client sends only the first 32 bytes directly as hex.
 
-2. **Base58** (Solana native):
-   ```json
-   "tx_hashes": ["EnMcGdJsZLFaH3HmmrNV5o8npSSiUj9w5F69Xdg5TTWs"]
-   ```
-
-3. **Base64**:
+3. **Base64** (32 bytes):
    ```json
    "tx_hashes": ["obLDxOX2eJASNFZ4kBIzRniQEjNGeJASNFZ4kBIzRg=="]
    ```
+   Client sends only the first 32 bytes encoded as base64.
 
-**Output (GET responses) - Always hex:**
+**Output Format (GET responses) - Always hex (32 bytes):**
 ```json
 "tx_hashes": ["a1b2c3d4e5f6789012345678901234567890123456789012345678901234"]
 ```
+
+**Best Practice**: 
+- **Client-side**: Extract the transaction signature from `transaction.signature` after signing and send it as base58 string
+- **API-side**: The API decodes the client-provided signature and uses the first 32 bytes internally for bundle matching
+- This separation ensures the client controls what is sent while the API handles format conversion
 
 #### Bundle Endpoints
 
@@ -809,7 +824,7 @@ cargo build --release --bin load-test
 - `compute` - Compute budget instructions
 - `x402_payment` - x402 payment transaction (0.001 SOL)
 - `x402_priority_signer` - Payment + add priority signer via API
-- `x402_bundle` - Payment + add bundle signer via API
+- `x402_bundle` - Payment + add bundle signer via API (uses transaction signatures)
 
 **Advanced Options:**
 ```bash
