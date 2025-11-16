@@ -40,6 +40,9 @@ enum TransactionType {
     BundleTransfer,
     Memo,
     Compute,
+    X402Payment,
+    X402PrioritySigner,
+    X402Bundle,
 }
 
 impl std::str::FromStr for TransactionType {
@@ -52,6 +55,9 @@ impl std::str::FromStr for TransactionType {
             "bundle_transfer" => Ok(TransactionType::BundleTransfer),
             "memo" => Ok(TransactionType::Memo),
             "compute" => Ok(TransactionType::Compute),
+            "x402_payment" | "x402payment" => Ok(TransactionType::X402Payment),
+            "x402_priority_signer" | "x402priority" => Ok(TransactionType::X402PrioritySigner),
+            "x402_bundle" | "x402bundle" => Ok(TransactionType::X402Bundle),
             _ => Err(format!("Invalid transaction type: {}", s)),
         }
     }
@@ -73,7 +79,7 @@ struct Config {
     #[arg(short, long, default_value = "10")]
     concurrency: usize,
 
-    /// Transaction type (airdrop, transfer, memo, compute)
+    /// Transaction type (airdrop, transfer, memo, compute, x402_payment, x402_priority_signer, x402_bundle)
     #[arg(short, long, default_value = "memo")]
     transaction_type: String,
 
@@ -92,6 +98,18 @@ struct Config {
     /// Don't wait for confirmation (maximum speed)
     #[arg(long, default_value = "false")]
     no_confirm: bool,
+
+    /// HTTP API URL for x402 operations
+    #[arg(long, default_value = "http://localhost:8080")]
+    api_url: String,
+
+    /// Payment recipient for x402 (required for x402 transaction types)
+    #[arg(long)]
+    payment_recipient: Option<String>,
+
+    /// Priority signer quota (for x402_priority_signer)
+    #[arg(long, default_value = "1000")]
+    priority_quota: u64,
 }
 
 /// Test metrics and statistics
@@ -457,6 +475,197 @@ impl SolanaLoadTester {
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
                 }
             }
+            TransactionType::X402Payment => {
+                // Simple payment transaction (0.001 SOL to recipient)
+                let recipient = match &self.config.payment_recipient {
+                    Some(addr) => match addr.parse::<Pubkey>() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return (
+                                false,
+                                start.elapsed(),
+                                Some(format!("Invalid payment recipient: {}", e)),
+                            )
+                        }
+                    },
+                    None => {
+                        return (
+                            false,
+                            start.elapsed(),
+                            Some("Payment recipient required for x402_payment".to_string()),
+                        )
+                    }
+                };
+
+                let amount = 1_000_000; // 0.001 SOL in lamports
+                match self.create_transfer_transaction(&recipient, amount) {
+                    Ok(txs) => {
+                        for tx in txs {
+                            if self.config.no_confirm {
+                                let _ = self
+                                    .client
+                                    .send_transaction(&tx)
+                                    .map(|_| ())
+                                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+                            } else {
+                                let _ = self
+                                    .client
+                                    .send_and_confirm_transaction(&tx)
+                                    .map(|_| ())
+                                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+                            }
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            TransactionType::X402PrioritySigner => {
+                // 1. Make payment transaction
+                // 2. Get signature
+                // 3. Add priority signer via API
+
+                let recipient = match &self.config.payment_recipient {
+                    Some(addr) => match addr.parse::<Pubkey>() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return (
+                                false,
+                                start.elapsed(),
+                                Some(format!("Invalid payment recipient: {}", e)),
+                            )
+                        }
+                    },
+                    None => {
+                        return (
+                            false,
+                            start.elapsed(),
+                            Some("Payment recipient required for x402_priority_signer".to_string()),
+                        )
+                    }
+                };
+
+                let amount = 1_000_000; // 0.001 SOL
+
+                // Create and send payment transaction
+                let txs = match self.create_transfer_transaction(&recipient, amount) {
+                    Ok(txs) => txs,
+                    Err(e) => return (false, start.elapsed(), Some(e.to_string())),
+                };
+
+                let mut transfer_result = Ok(());
+                for tx in txs {
+                    match self.client.send_and_confirm_transaction(&tx) {
+                        Ok(sig) => {
+                            // Now call HTTP API to add priority signer
+                            let api_client = reqwest::Client::new();
+                            let url = format!("{}/priority/signer", self.config.api_url);
+
+                            let body = serde_json::json!({
+                                "pubkey": self.payer.pubkey().to_string(),
+                                "quota": self.config.priority_quota,
+                                "payment_signature": sig.to_string()
+                            });
+
+                            match api_client.post(&url).json(&body).send().await {
+                                Ok(response) => {
+                                    if let Err(e) = response.error_for_status() {
+                                        transfer_result =
+                                            Err(Box::new(e) as Box<dyn std::error::Error>);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    transfer_result =
+                                        Err(Box::new(e) as Box<dyn std::error::Error>);
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            transfer_result = Err(Box::new(e) as Box<dyn std::error::Error>);
+                            break;
+                        }
+                    }
+                }
+
+                transfer_result
+            }
+            TransactionType::X402Bundle => {
+                // 1. Make payment transaction
+                // 2. Add bundle via API
+
+                let recipient = match &self.config.payment_recipient {
+                    Some(addr) => match addr.parse::<Pubkey>() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return (
+                                false,
+                                start.elapsed(),
+                                Some(format!("Invalid payment recipient: {}", e)),
+                            )
+                        }
+                    },
+                    None => {
+                        return (
+                            false,
+                            start.elapsed(),
+                            Some("Payment recipient required for x402_bundle".to_string()),
+                        )
+                    }
+                };
+
+                let amount = 1_000_000; // 0.001 SOL
+
+                // Create and send payment transaction
+                let txs = match self.create_transfer_transaction(&recipient, amount) {
+                    Ok(txs) => txs,
+                    Err(e) => return (false, start.elapsed(), Some(e.to_string())),
+                };
+
+                let mut transfer_result = Ok(());
+                for tx in txs {
+                    match self.client.send_and_confirm_transaction(&tx) {
+                        Ok(sig) => {
+                            // Create dummy transaction hashes for bundle
+                            let tx_hashes =
+                                vec![hex::encode(sig.as_ref()), hex::encode(&[1u8; 32])];
+
+                            // Call HTTP API to add bundle signer
+                            let api_client = reqwest::Client::new();
+                            let url = format!("{}/bundles/signer", self.config.api_url);
+
+                            let body = serde_json::json!({
+                                "pubkey": self.payer.pubkey().to_string(),
+                                "tip": 50_000_000u64,
+                                "tx_hashes": tx_hashes,
+                                "payment_signature": sig.to_string()
+                            });
+
+                            match api_client.post(&url).json(&body).send().await {
+                                Ok(response) => {
+                                    if let Err(e) = response.error_for_status() {
+                                        transfer_result =
+                                            Err(Box::new(e) as Box<dyn std::error::Error>);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    transfer_result =
+                                        Err(Box::new(e) as Box<dyn std::error::Error>);
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            transfer_result = Err(Box::new(e) as Box<dyn std::error::Error>);
+                            break;
+                        }
+                    }
+                }
+
+                transfer_result
+            }
         };
 
         let latency = start.elapsed();
@@ -545,6 +754,7 @@ impl SolanaLoadTester {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::parse();
+    // 2AS1StrCJM3NyhHNBqe645vjX7VTgjRazZd11LorvFpx
     config.keypair = Some(String::from("./load-tester/keypair.json"));
     let tester = SolanaLoadTester::new(config)?;
     tester.run().await?;

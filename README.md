@@ -1,15 +1,16 @@
 # Extended Scheduler Bindings
 
-High-performance transaction scheduler for Solana with advanced priority management, quota systems, bundle support, and HTTP API.
+High-performance transaction scheduler for Solana with advanced priority management, quota systems, bundle support, HTTP API and x402 for priority payment.
 
 ## 🌟 Features
 
 - **Priority-Based Scheduling** - Prioritize transactions by signers or program IDs with configurable multiplier
 - **Quota Management** - Set transaction limits for priority entries with automatic depletion
 - **Bundle Support** - Group transactions with automatic batching and tip-based prioritization
+- **Priority Payment** - Pay for priority transactions with x402 tokens
 - **HTTP REST API** - Remote management and real-time monitoring
 - **Performance Metrics** - Real-time throughput, latency, and efficiency tracking
-- **Load Testing Tools** - Comprehensive testing suite in Rust, Python, TypeScript, and Bash
+- **Load Testing Tools** - Comprehensive testing suite in Rust
 - **Execution Statistics** - Per-signer/program success rates and transaction counts
 
 ---
@@ -152,11 +153,98 @@ RESTful API for remote scheduler management and monitoring.
 #### Starting the Server
 
 ```bash
-# Default: localhost:8080
+# Default: localhost:8080 (no payment verification)
 ./core --bindings-ipc /path/to/ipc
 
 # Custom address
 ./core --bindings-ipc /path/to/ipc --http-addr 0.0.0.0:3000
+
+# With x402 payment verification
+./core --bindings-ipc /path/to/ipc \
+  --rpc-url http://localhost:8899 \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj
+```
+
+#### x402 Payment Protocol
+
+The HTTP API supports HTTP 402 (Payment Required) for monetizing scheduler priority access. When enabled, clients must pay 0.001 SOL per operation.
+
+**Payment-Protected Endpoints:**
+- `POST /priority/signer` (with quota)
+- `POST /priority/program` (with quota)
+- `POST /bundles/signer`
+- `POST /bundles/program`
+
+**How It Works:**
+1. Client sends 0.001 SOL to payment recipient
+2. Client gets transaction signature
+3. Client includes signature in API request
+4. Server verifies payment on-chain (with retries)
+5. Request processed if payment verified
+
+**Payment Verification:**
+- Checks transaction exists and succeeded
+- Verifies amount >= 1,000,000 lamports (0.001 SOL)
+- Automatic retry with exponential backoff (handles RPC indexing delay)
+- Up to 5 retries: 100ms → 200ms → 400ms → 800ms → 1600ms
+
+**Example with Payment:**
+```bash
+# 1. Create payment transaction (0.001 SOL)
+SIGNATURE=$(solana transfer 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj 0.001 --output json | jq -r '.signature')
+
+# 2. Use signature to add priority signer
+curl -X POST http://localhost:8080/priority/signer \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"pubkey\": \"YourPubkey...\",
+    \"quota\": 1000,
+    \"payment_signature\": \"$SIGNATURE\"
+  }"
+```
+
+**Testing x402 with Load Tester:**
+```bash
+# Test x402 payment flow
+cargo run -p load-tester -- \
+  --transaction-type x402_payment \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --num-transactions 10
+
+# Test priority signer with payment
+cargo run -p load-tester -- \
+  --transaction-type x402_priority_signer \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --priority-quota 5000 \
+  --num-transactions 10 \
+  --api-url http://localhost:8080
+
+# Test bundle with payment
+cargo run -p load-tester -- \
+  --transaction-type x402_bundle \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --num-transactions 10
+```
+
+**Disable Payment Verification:**
+```bash
+# Omit --rpc-url and --payment-recipient to disable
+./core --bindings-ipc /path/to/ipc
+```
+
+**Payment Error Responses:**
+```bash
+# Missing payment signature
+HTTP 402 Payment Required
+{"error": "Payment required for quota-based operations"}
+
+# Invalid/insufficient payment
+HTTP 402 Payment Required
+{"error": "Payment verification failed: Insufficient payment"}
+
+# Transaction not found (still indexing)
+HTTP 402 Payment Required
+{"error": "Payment verification failed: Transaction not found after 5 retries"}
 ```
 
 #### Endpoints Overview
@@ -719,6 +807,9 @@ cargo build --release --bin load-test
 - `bundle_transfer` - Medium (SOL transfer)
 - `memo` - Memo program (lowest overhead)
 - `compute` - Compute budget instructions
+- `x402_payment` - x402 payment transaction (0.001 SOL)
+- `x402_priority_signer` - Payment + add priority signer via API
+- `x402_bundle` - Payment + add bundle signer via API
 
 **Advanced Options:**
 ```bash
@@ -730,6 +821,13 @@ cargo build --release --bin load-test
   --no-confirm \          # 10-30x faster!
   --keypair /path/to/keypair.json \
   --dry-run               # Test without sending
+
+# x402 specific options
+./target/release/load-test \
+  --transaction-type x402_priority_signer \
+  --api-url http://localhost:8080 \
+  --payment-recipient 6BgmS3qMQcLi6pj5xSNoyFAGctt1YJAPsyiNrmeLo3xj \
+  --priority-quota 5000   # Quota for priority signer
 ```
 
 **Ultra-Fast Mode (no confirmation):**

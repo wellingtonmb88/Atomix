@@ -1,3 +1,5 @@
+mod payment;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -11,6 +13,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use greedy_scheduler::api::SchedulerApi;
+pub use payment::{PaymentVerifier, REQUIRED_PAYMENT_LAMPORTS};
 
 /// Helper function to decode tx hash from hex, base58, or base64
 fn decode_tx_hash(hash_str: &str) -> Result<Vec<u8>, String> {
@@ -43,6 +46,7 @@ fn encode_tx_hash(bytes: &[u8]) -> String {
 #[derive(Clone)]
 struct AppState {
     api: SchedulerApi,
+    payment_verifier: Option<PaymentVerifier>,
 }
 
 /// Request to add a signer to priority list
@@ -52,6 +56,8 @@ pub struct AddSignerRequest {
     pub pubkey: String,
     /// Optional quota (if None, unlimited)
     pub quota: Option<u64>,
+    /// Payment transaction signature (required for quota-based signers)
+    pub payment_signature: Option<String>,
 }
 
 /// Request to add a program to priority list
@@ -61,6 +67,8 @@ pub struct AddProgramRequest {
     pub pubkey: String,
     /// Optional quota (if None, unlimited)
     pub quota: Option<u64>,
+    /// Payment transaction signature (required for quota-based programs)
+    pub payment_signature: Option<String>,
 }
 
 /// Request to set priority multiplier
@@ -86,6 +94,8 @@ pub struct AddBundleRequest {
     pub tip: u64,
     /// Transaction hashes (as base64 or hex strings)
     pub tx_hashes: Vec<String>,
+    /// Payment transaction signature (required)
+    pub payment_signature: String,
 }
 
 /// Request to update bundle tip
@@ -186,6 +196,39 @@ async fn add_signer(
     let pubkey = Pubkey::from_str(&req.pubkey).map_err(|e| {
         (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: format!("Invalid pubkey: {}", e) }))
     })?;
+
+    // Check if payment is required
+    if req.quota.is_some() {
+        // Quota-based signer requires payment
+        if let Some(payment_sig) = &req.payment_signature {
+            if let Some(verifier) = &state.payment_verifier {
+                verifier.verify_payment(payment_sig).await.map_err(|e| {
+                    (
+                        StatusCode::PAYMENT_REQUIRED,
+                        Json(ErrorResponse {
+                            error: format!(
+                                "Payment verification failed: {}. Please send {} SOL to {} and provide the transaction signature.",
+                                e,
+                                PaymentVerifier::required_payment_sol(),
+                                verifier.recipient()
+                            ),
+                        }),
+                    )
+                })?;
+            }
+        } else if state.payment_verifier.is_some() {
+            return Err((
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Payment required. Please send {} SOL to {} and provide the transaction signature.",
+                        PaymentVerifier::required_payment_sol(),
+                        state.payment_verifier.as_ref().unwrap().recipient()
+                    ),
+                }),
+            ));
+        }
+    }
 
     match req.quota {
         Some(quota) => state.api.add_priority_signer(pubkey, quota),
@@ -297,6 +340,39 @@ async fn add_program(
     let pubkey = Pubkey::from_str(&req.pubkey).map_err(|e| {
         (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: format!("Invalid pubkey: {}", e) }))
     })?;
+
+    // Check if payment is required
+    if req.quota.is_some() {
+        // Quota-based program requires payment
+        if let Some(payment_sig) = &req.payment_signature {
+            if let Some(verifier) = &state.payment_verifier {
+                verifier.verify_payment(payment_sig).await.map_err(|e| {
+                    (
+                        StatusCode::PAYMENT_REQUIRED,
+                        Json(ErrorResponse {
+                            error: format!(
+                                "Payment verification failed: {}. Please send {} SOL to {} and provide the transaction signature.",
+                                e,
+                                PaymentVerifier::required_payment_sol(),
+                                verifier.recipient()
+                            ),
+                        }),
+                    )
+                })?;
+            }
+        } else if state.payment_verifier.is_some() {
+            return Err((
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Payment required. Please send {} SOL to {} and provide the transaction signature.",
+                        PaymentVerifier::required_payment_sol(),
+                        state.payment_verifier.as_ref().unwrap().recipient()
+                    ),
+                }),
+            ));
+        }
+    }
 
     match req.quota {
         Some(quota) => state.api.add_priority_program(pubkey, quota),
@@ -673,6 +749,23 @@ async fn add_bundle_signer(
         (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: format!("Invalid pubkey: {}", e) }))
     })?;
 
+    // Verify payment (required for bundles)
+    if let Some(verifier) = &state.payment_verifier {
+        verifier.verify_payment(&req.payment_signature).await.map_err(|e| {
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Payment verification failed: {}. Please send {} SOL to {} and provide the transaction signature.",
+                        e,
+                        PaymentVerifier::required_payment_sol(),
+                        verifier.recipient()
+                    ),
+                }),
+            )
+        })?;
+    }
+
     // Decode tx hashes
     let tx_hashes: Result<Vec<Vec<u8>>, String> =
         req.tx_hashes.iter().map(|h| decode_tx_hash(h)).collect();
@@ -850,6 +943,23 @@ async fn add_bundle_program(
     let pubkey = Pubkey::from_str(&req.pubkey).map_err(|e| {
         (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: format!("Invalid pubkey: {}", e) }))
     })?;
+
+    // Verify payment (required for bundles)
+    if let Some(verifier) = &state.payment_verifier {
+        verifier.verify_payment(&req.payment_signature).await.map_err(|e| {
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Payment verification failed: {}. Please send {} SOL to {} and provide the transaction signature.",
+                        e,
+                        PaymentVerifier::required_payment_sol(),
+                        verifier.recipient()
+                    ),
+                }),
+            )
+        })?;
+    }
 
     // Decode tx hashes
     let tx_hashes: Result<Vec<Vec<u8>>, String> =
@@ -1035,8 +1145,8 @@ async fn clear_bundles(
 }
 
 /// Creates the HTTP API router
-pub fn create_router(api: SchedulerApi) -> Router {
-    let state = AppState { api };
+pub fn create_router(api: SchedulerApi, payment_verifier: Option<PaymentVerifier>) -> Router {
+    let state = AppState { api, payment_verifier };
 
     Router::new()
         // Health check
@@ -1086,8 +1196,19 @@ pub async fn start_server(
     api: SchedulerApi,
     addr: SocketAddr,
     shutdown: toolbox::shutdown::Shutdown,
+    payment_verifier: Option<PaymentVerifier>,
 ) -> Result<(), std::io::Error> {
-    let app = create_router(api);
+    let app = create_router(api, payment_verifier.clone());
+
+    if let Some(verifier) = &payment_verifier {
+        tracing::info!(
+            "Payment verification enabled: {} SOL required, recipient: {}",
+            PaymentVerifier::required_payment_sol(),
+            verifier.recipient()
+        );
+    } else {
+        tracing::warn!("Payment verification DISABLED - all operations are free");
+    }
 
     tracing::info!("Starting HTTP API server on {}", addr);
 

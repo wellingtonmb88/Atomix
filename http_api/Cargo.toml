@@ -10,11 +10,15 @@ bs58 = "0.5"
 greedy-scheduler.workspace = true
 hex = "0.4"
 serde = { workspace = true, features = ["derive"] }
+solana-client = "2.3.1"
 solana-pubkey.workspace = true
+solana-signature = "2.3.0"
 solana-sdk = "3.0.0"
+solana-transaction-status = "2.3.1"
 tokio = { workspace = true, features = ["macros", "rt"] }
 toolbox = { workspace = true, features = ["shutdown"] }
 tracing.workspace = true
+solana-commitment-config = "2.2.1"
 
 [lints]
 workspace = true
