@@ -1,4 +1,4 @@
-# Extended Scheduler Bindings
+# Atomix
 
 High-performance transaction scheduler for Solana with advanced priority management, quota systems, bundle support, HTTP API and x402 for priority payment.
 
@@ -12,6 +12,11 @@ High-performance transaction scheduler for Solana with advanced priority managem
 - **Performance Metrics** - Real-time throughput, latency, and efficiency tracking
 - **Load Testing Tools** - Comprehensive testing suite in Rust
 - **Execution Statistics** - Per-signer/program success rates and transaction counts
+
+## 🏗️ Architecture
+
+![Macro Architecture](./docs/architecture.png)
+![External Scheduler Bindings](./docs/external_scheduler.png)
 
 ---
 
@@ -442,7 +447,7 @@ Group multiple transactions with tip-based prioritization and automatic batching
 "tx_hashes": ["a1b2c3d4e5f6789012345678901234567890123456789012345678901234"]
 ```
 
-**Best Practice**: 
+**Best Practice**:
 - **Client-side**: Extract the transaction signature from `transaction.signature` after signing and send it as base58 string
 - **API-side**: The API decodes the client-provided signature and uses the first 32 bytes internally for bundle matching
 - This separation ensures the client controls what is sent while the API handles format conversion
