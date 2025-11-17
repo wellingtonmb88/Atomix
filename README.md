@@ -15,8 +15,8 @@ High-performance transaction scheduler for Solana with advanced priority managem
 
 ## 🏗️ Architecture
 
-![Macro Architecture](./docs/architecture.png)
-![External Scheduler Bindings](./docs/external_scheduler.png)
+![Macro Architecture](./.docs/architecture.png)
+![External Scheduler Bindings](./.docs/external_scheduler.png)
 
 ---
 
